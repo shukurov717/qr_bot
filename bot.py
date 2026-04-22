@@ -10,7 +10,7 @@ from telegram.ext import (
 
 # ================= CONFIG =================
 import os
-TOKEN = os.getenv("8037120838:AAExWv4GRR6wQKOOTQ3zS4Otk_gt9bwruoE")
+TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 6594366391
 
 DB_FILE = "db.json"
