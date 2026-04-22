@@ -1,3 +1,5 @@
+import telegram
+print("VERSION:", telegram.__version__)
 import io, zipfile, json, os
 from PIL import Image
 import qrcode
