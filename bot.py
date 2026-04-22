@@ -166,8 +166,8 @@ async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGBA")
             qr_img = qr_img.resize((size, size), Image.NEAREST)
 
-            px = x1 + (block_w - size) // 2
-            py = y1 + (block_w - size) // 2
+            px = x1 + margin
+            py = y1 + margin
 
             img = template.copy()
             img.paste(qr_img, (px, py), qr_img)
