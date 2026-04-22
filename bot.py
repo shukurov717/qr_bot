@@ -1,4 +1,4 @@
-import io, zipfile, json, time, os
+import io, zipfile, json, os
 from PIL import Image
 import qrcode
 
@@ -9,11 +9,12 @@ from telegram.ext import (
 )
 
 # ================= CONFIG =================
-import os
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 6594366391
-
 DB_FILE = "db.json"
+
+if not TOKEN:
+    raise ValueError("TOKEN topilmadi! Railway ga TOKEN qo‘y!")
 
 # ================= DB =================
 def load_db():
@@ -26,7 +27,7 @@ def load_db():
             "pending": [],
             "blocked": [],
             "users": {},
-            "config": {"locked": True, "max_range": 100}
+            "config": {"locked": False}
         }
 
 def save_db():
@@ -47,7 +48,7 @@ def check_access(uid):
         return False, "🔒 Bot yopiq"
 
     if uid in db["blocked"]:
-        return False, "🚫 Bloklangan"
+        return False, "🚫 Blocklangan"
 
     if uid not in db["allowed"]:
         if uid not in db["pending"]:
@@ -63,14 +64,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok, msg = check_access(uid)
     if not ok:
         return await update.message.reply_text(msg)
+
     await update.message.reply_text("📷 Rasm yubor")
 
-# ================= ADMIN PANEL =================
+# ================= ADMIN =================
 async def admin_panel(update, context):
     kb = [
         [InlineKeyboardButton("👥 Users", callback_data="users")],
         [InlineKeyboardButton("📊 Stats", callback_data="stats")],
-        [InlineKeyboardButton("🔒 Lock/Unlock", callback_data="lock")]
+        [InlineKeyboardButton("🔒 Lock", callback_data="lock")]
     ]
     await update.effective_message.reply_text("🎛 Admin Panel", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -85,13 +87,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         return await q.edit_message_text("❌ Ruxsat yo‘q")
 
-    # ADMIN
     if data == "admin":
         return await admin_panel(update, context)
 
-    # USERS
     if data == "users":
-        text = f"""👥 Users:
+        txt = f"""👥 Users:
 Allowed: {len(db['allowed'])}
 Pending: {len(db['pending'])}
 Blocked: {len(db['blocked'])}
@@ -102,19 +102,16 @@ Blocked: {len(db['blocked'])}
             [InlineKeyboardButton("🚫 Blocked", callback_data="blocked")],
             [InlineKeyboardButton("🔙 Orqaga", callback_data="admin")]
         ]
-        return await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        return await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-    # ALLOWED LIST
     if data == "allowed":
         txt = "\n".join(map(str, db["allowed"])) or "Bo‘sh"
-        return await q.edit_message_text(f"📋 Allowed:\n{txt}", reply_markup=back("users"))
+        return await q.edit_message_text(txt, reply_markup=back("users"))
 
-    # BLOCKED LIST
     if data == "blocked":
         txt = "\n".join(map(str, db["blocked"])) or "Bo‘sh"
-        return await q.edit_message_text(f"🚫 Blocked:\n{txt}", reply_markup=back("users"))
+        return await q.edit_message_text(txt, reply_markup=back("users"))
 
-    # PENDING LIST
     if data == "pending":
         buttons = []
         for u in db["pending"][:10]:
@@ -125,49 +122,34 @@ Blocked: {len(db['blocked'])}
         buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="users")])
         return await q.edit_message_text("⏳ Pending:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # ACCEPT (FIXED)
     if data.startswith("ok_"):
         u = int(data.split("_")[1])
-
         if u in db["pending"]:
             db["pending"].remove(u)
-
         if u not in db["allowed"]:
             db["allowed"].append(u)
-
         save_db()
         return await q.answer("✅ Qabul qilindi")
 
-    # REJECT (FIXED)
     if data.startswith("no_"):
         u = int(data.split("_")[1])
-
         if u in db["pending"]:
             db["pending"].remove(u)
-
         if u not in db["blocked"]:
             db["blocked"].append(u)
-
         save_db()
         return await q.answer("🚫 Rad etildi")
 
-    # LOCK
     if data == "lock":
         db["config"]["locked"] = not db["config"]["locked"]
         save_db()
-        status = "🔒 Yopiq" if db["config"]["locked"] else "🔓 Ochiq"
-        return await q.edit_message_text(f"Holat: {status}", reply_markup=back())
+        return await q.edit_message_text("🔄 Holat o‘zgardi", reply_markup=back())
 
-    # STATS
     if data == "stats":
-        total_qr = sum([u.get("qr", 0) for u in db["users"].values()])
-        txt = f"""📊 Statistika:
-Users: {len(db["users"])}
-QR: {total_qr}
-"""
-        return await q.edit_message_text(txt, reply_markup=back())
+        total = sum([u.get("qr", 0) for u in db["users"].values()])
+        return await q.edit_message_text(f"QR: {total}", reply_markup=back())
 
-# ================= QR FLOW (SENIKI) =================
+# ================= QR =================
 users = {}
 
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,7 +163,7 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(path)
 
     users[uid] = {"template": path, "step": "code"}
-    await update.message.reply_text("🔢 Kod yoz (masalan: 106243)")
+    await update.message.reply_text("🔢 Kod yoz")
 
 async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -197,7 +179,7 @@ async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user["step"] == "code":
         user["base"] = update.message.text.strip()
         user["step"] = "range"
-        return await update.message.reply_text("📊 Diapazon: 00 50")
+        return await update.message.reply_text("📊 00 50 yoz")
 
     if user["step"] == "range":
         try:
@@ -206,12 +188,7 @@ async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             template = Image.open(user["template"]).convert("RGBA")
             w, h = template.size
 
-            block_w = int(w * 0.62)
-            x1 = (w - block_w) // 2
-            y1 = int(h * 0.44)
-
-            margin = int(block_w * 0.015)
-            size = int(block_w * 0.85)
+            size = int(w * 0.35)
 
             zip_buffer = io.BytesIO()
             zipf = zipfile.ZipFile(zip_buffer, "w")
@@ -219,29 +196,15 @@ async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(start, end + 1):
                 code = user["base"] + str(i).zfill(2)
 
+                qr = qrcode.make(code).resize((size, size))
+
                 img = template.copy()
+                img.paste(qr, (int(w*0.3), int(h*0.5)))
 
-                qr = qrcode.QRCode(
-                    version=None,
-                    error_correction=qrcode.constants.ERROR_CORRECT_L,
-                    box_size=5,
-                    border=1
-                )
-                qr.add_data(code)
-                qr.make(fit=True)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
 
-                qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGBA")
-                qr_img = qr_img.resize((size, size), Image.NEAREST)
-
-                px = x1 + (block_w - size) // 2
-                py = y1 + (block_w - size) // 2
-
-                img.paste(qr_img, (px, py), qr_img)
-
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format="PNG")
-
-                zipf.writestr(f"{code}.png", img_bytes.getvalue())
+                zipf.writestr(f"{code}.png", buf.getvalue())
 
                 db["users"].setdefault(str(uid), {"qr": 0})
                 db["users"][str(uid)]["qr"] += 1
@@ -253,8 +216,8 @@ async def text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_db()
             users.pop(uid)
 
-        except:
-            await update.message.reply_text("❌ Xato")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Xato: {e}")
 
 # ================= RUN =================
 app = ApplicationBuilder().token(TOKEN).build()
