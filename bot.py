@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import io, zipfile, json, os, datetime, asyncio
 from PIL import Image
 import qrcode
@@ -898,5 +897,4 @@ app.add_handler(CallbackQueryHandler(admin_buttons))
 app.add_handler(MessageHandler(filters.PHOTO, photo))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text))
 
->>>>>>> e0f1972bc5230533750e100a99e84291b0065ee5
 app.run_polling()
