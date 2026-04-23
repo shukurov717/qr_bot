@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 python-telegram-bot==20.7
 Pillow==10.3.0
-=======
-python-telegram-bot==20.7
-Pillow==10.3.0
->>>>>>> e0f1972bc5230533750e100a99e84291b0065ee5
 qrcode==7.4.2
+httpx==0.25.2
