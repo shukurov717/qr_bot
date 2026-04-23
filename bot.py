@@ -8,14 +8,12 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes
 )
 
-# ===== ENV =====
 TOKEN   = os.getenv("TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 DB_FILE  = "db.json"
 sessions = {}   # chat_id -> session dict
 
-# ===== DB =====
 def load_db():
     try:
         with open(DB_FILE, "r", encoding="utf-8") as f:
@@ -52,7 +50,7 @@ def save_user_info(user):
 
 def get_display(uid):
     info = db["user_info"].get(str(uid), {})
-    return f"{info.get('name','Noma\\'lum')} ({info.get('username','—')})"
+    return f"{info.get('name','Noma'lum')} ({info.get('username','—')})"
 
 def inc_qr(uid, n):
     s = str(uid)
@@ -361,9 +359,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid     = query.from_user.id
     chat_id = query.message.chat_id
 
-    # =========================================================
-    # USER FLOWS
-    # =========================================================
     if data == "new_photo":
         await query.message.reply_text("📷 Rasm yuboring:")
         return
@@ -433,9 +428,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"❌ Xato: {ex}")
         return
 
-    # =========================================================
-    # ADMIN FLOWS  (admin only below)
-    # =========================================================
     if uid != ADMIN_ID:
         return
 
