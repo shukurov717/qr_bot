@@ -50,7 +50,10 @@ def save_user_info(user):
 
 def get_display(uid):
     info = db["user_info"].get(str(uid), {})
-    return f"{info.get('name','Noma'lum')} ({info.get('username','—')})"
+    return "{} ({})".format(
+    info.get('name', "Noma'lum"),
+    info.get('username', '—')
+)
 
 def inc_qr(uid, n):
     s = str(uid)
