@@ -669,7 +669,6 @@ app.add_handler(CommandHandler("cancel", cmd_cancel))
 app.add_handler(CallbackQueryHandler(callback_router))
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-=======
 import io, zipfile, json, os
 from PIL import Image
 import qrcode
