@@ -1184,14 +1184,6 @@ app.add_handler(CallbackQueryHandler(callback_router))
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-if __name__ == '__main__':
-    if WEBHOOK_URL:
-        logger.info(f"Webhook rejimida ishga tushdi: {WEBHOOK_URL} port={PORT} ✅")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=WEBHOOK_URL,
-            drop_pending_updates=True,
         )
     else:
         logger.info("Polling rejimida ishga tushdi ✅")
