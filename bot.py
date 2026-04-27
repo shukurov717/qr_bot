@@ -77,6 +77,10 @@ def cleanup_templates():
 db = load_db()
 # Eski DB lar uchun migrate
 for _k, _v in [
+    ("allowed", []),
+    ("pending", []),
+    ("blocked", []),
+    ("locked", False),
     ("stats",   {"total_qr": 0}),
     ("user_info", {}),
     ("errors",  []),
