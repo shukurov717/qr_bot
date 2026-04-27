@@ -1196,3 +1196,4 @@ if __name__ == '__main__':
     else:
         logger.info("Polling rejimida ishga tushdi ✅")
         app.run_polling(drop_pending_updates=True)
+# test
