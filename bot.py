@@ -20,8 +20,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN    = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+TOKEN          = os.getenv("TOKEN")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "UZ_CS")  # Limit uchun admin
+_admin_env = os.getenv("ADMIN_ID")
+if not TOKEN or not _admin_env:
+    raise RuntimeError("TOKEN yoki ADMIN_ID muhit o'zgaruvchisi o'rnatilmagan!")
+ADMIN_ID = int(_admin_env)
 
 DB_FILE  = "db.json"
 sessions = {}   # chat_id -> session dict
@@ -57,6 +61,16 @@ def save_db():
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
 
+def cleanup_templates():
+    """Startup da eski template fayllarini diskdan tozalash."""
+    import glob
+    for f in glob.glob("template_*.png"):
+        try:
+            os.remove(f)
+            logger.info(f"Eski template o'chirildi: {f}")
+        except Exception:
+            pass
+
 db = load_db()
 # Eski DB lar uchun migrate
 for _k, _v in [
@@ -68,6 +82,7 @@ for _k, _v in [
 ]:
     if _k not in db:
         db[_k] = _v
+cleanup_templates()
 
 # ===== ERROR LOGGING =====
 def log_error(uid, error_msg, context_info=""):
@@ -249,6 +264,27 @@ def admin_main_kb():
         ],
     ])
 
+# ===== ADMIN NOTIFICATION HELPER =====
+async def _notify_admin_pending(context, user):
+    """Adminga yangi pending foydalanuvchi haqida inline tugmali xabar."""
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Qabul",   callback_data=f"ok_{user.id}"),
+        InlineKeyboardButton("❌ Rad",     callback_data=f"no_{user.id}"),
+        InlineKeyboardButton("👁 Ko'rish", callback_data=f"view_{user.id}"),
+    ]])
+    try:
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"🔔 <b>Yangi foydalanuvchi so'rovi!</b>\n\n"
+            f"👤 {user.full_name}\n"
+            f"🔗 {'@' + user.username if user.username else '—'}\n"
+            f"🆔 <code>{user.id}</code>",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except Exception as e:
+        logger.warning(f"Admin bildirishnomasi yuborilmadi: {e}")
+
 # ===== /start =====
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid     = update.effective_user.id
@@ -256,9 +292,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user_info(update.effective_user)
     track_activity(uid, "start")
 
+    was_pending = uid in db["pending"]
     ok, msg = check(uid)
     if not ok:
-        return await update.message.reply_text(msg)
+        await update.message.reply_text(msg)
+        if not was_pending and uid in db["pending"]:
+            await _notify_admin_pending(context, update.effective_user)
+        return
 
     session  = sessions.get(chat_id, {})
     has_last = bool(session.get("last_template") and
@@ -407,7 +447,7 @@ async def generate_qr(message, chat_id, uid, start_r: int, end_r: int):
                 img.save(buf, "PNG", optimize=True)
                 buf.seek(0)
                 await message.reply_document(buf, filename=f"{code}.png")
-                await asyncio.sleep(0.05)  # Telegram limit uchun minimal kechikish
+                await asyncio.sleep(0.35)  # Telegram flood limit uchun
             await message.reply_text(
                 f"✅ <b>{count}</b> ta PNG yuborildi!\n"
                 f"🔢 Kod: <code>{base}</code> [{start_r:02d}–{end_r:02d}]",
@@ -421,6 +461,17 @@ async def generate_qr(message, chat_id, uid, start_r: int, end_r: int):
         track_activity(uid, f"generated_{count}_qr")
         sessions.pop(chat_id, None)
         logger.info(f"UID={uid} | {count} ta QR yaratildi | base={base} | {start_r}-{end_r}")
+
+        # ⚠️ Limit ogohlantirish
+        if uid != ADMIN_ID:
+            remaining = db["user_info"].get(str(uid), {}).get("limit", 50)
+            if 0 < remaining <= 5:
+                await message.reply_text(
+                    f"⚠️ <b>Diqqat!</b> Limitingiz faqat <b>{remaining}</b> taga yetdi!\n"
+                    f"Yangi limit olish uchun admin bilan bog'laning:\n"
+                    f"👤 @{ADMIN_USERNAME}",
+                    parse_mode="HTML"
+                )
 
     except FileNotFoundError:
         log_error(uid, "template_not_found", session.get("template"))
@@ -446,9 +497,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     save_user_info(update.effective_user)
 
+    was_pending = uid in db["pending"]
     ok, msg = check(uid)
     if not ok:
-        return await update.message.reply_text(msg)
+        await update.message.reply_text(msg)
+        if not was_pending and uid in db["pending"]:
+            await _notify_admin_pending(context, update.effective_user)
+        return
 
     if not check_rate_limit(uid):
         return await update.message.reply_text(
@@ -1062,17 +1117,82 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         return
 
+# ===== /help =====
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    save_user_info(update.effective_user)
+    await update.message.reply_text(
+        "❓ <b>Bot qo'llanmasi</b>\n\n"
+        "📷 <b>Ishlash tartibi:</b>\n"
+        "1. /start — botni ishga tushiring\n"
+        "2. Shablon rasm yuboring (background)\n"
+        "3. 🎨 QR rangini tanlang\n"
+        "4. 📁 Fayl formatini tanlang (ZIP / PNG)\n"
+        "5. 🔢 Asosiy kodni kiriting (masalan: <code>106243</code>)\n"
+        "6. 📊 Diapazonni tanlang (masalan: <code>01–50</code>)\n"
+        "7. ✅ QR kodlar tayyor!\n\n"
+        "📋 <b>Komandalar:</b>\n"
+        "/start — Boshlash\n"
+        "/profile — Mening profilim\n"
+        "/history — Yaratish tarixi\n"
+        "/limit — Limit holati\n"
+        "/help — Ushbu qo'llanma\n"
+        "/cancel — Jarayonni bekor qilish\n\n"
+        f"💬 Savollar uchun: @{ADMIN_USERNAME}",
+        parse_mode="HTML"
+    )
+
+# ===== /profile =====
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    save_user_info(update.effective_user)
+    info   = db["user_info"].get(str(uid), {})
+    status = user_status(uid)
+    hist   = db.get("history", {}).get(str(uid), [])
+    used   = info.get("qr_count", 0)
+    limit  = info.get("limit", 50)
+    limit_line = "📦 Limit: <b>\u221e (Admin)</b>\n" if uid == ADMIN_ID else (
+        f"✅ Ishlatilgan: <b>{used}</b> ta\n"
+        f"📦 Qolgan limit: <b>{limit}</b> ta\n"
+    )
+    await update.message.reply_text(
+        f"👤 <b>Profilingiz</b>\n\n"
+        f"📛 Ism: {info.get('name', '—')}\n"
+        f"🔗 Username: {info.get('username', '—')}\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"🖼 Yaratilgan QR: <b>{used}</b> ta\n"
+        f"{limit_line}"
+        f"📜 Tarix yozuvlari: <b>{len(hist)}</b> ta\n"
+        f"📅 Qo'shilgan: {info.get('joined', '—')}\n"
+        f"🕐 Oxirgi faollik: {info.get('last_active', '—')}\n"
+        f"📌 Holati: {status}",
+        parse_mode="HTML"
+    )
+
 # ===== RUN =====
+PORT        = int(os.getenv("PORT", 8443))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Railway: https://yourapp.up.railway.app
+
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start",   cmd_start))
 app.add_handler(CommandHandler("admin",   cmd_admin))
 app.add_handler(CommandHandler("cancel",  cmd_cancel))
 app.add_handler(CommandHandler("limit",   cmd_limit))
 app.add_handler(CommandHandler("history", cmd_history))
+app.add_handler(CommandHandler("help",    cmd_help))
+app.add_handler(CommandHandler("profile", cmd_profile))
 app.add_handler(CallbackQueryHandler(callback_router))
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
 if __name__ == '__main__':
-    logger.info("Bot ishga tushdi ✅")
-    app.run_polling(drop_pending_updates=True)
+    if WEBHOOK_URL:
+        logger.info(f"Webhook rejimida ishga tushdi: {WEBHOOK_URL} port={PORT} ✅")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+            drop_pending_updates=True,
+        )
+    else:
+        logger.info("Polling rejimida ishga tushdi ✅")
+        app.run_polling(drop_pending_updates=True)
