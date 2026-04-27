@@ -1,4 +1,7 @@
 import io, zipfile, json, os, datetime, asyncio, time, logging
+from concurrent.futures import ThreadPoolExecutor
+
+_THREAD_POOL = ThreadPoolExecutor(max_workers=4)
 from collections import defaultdict
 from PIL import Image
 import qrcode
@@ -372,63 +375,73 @@ async def _show_history(message, uid):
         )
     await message.reply_text("\n".join(lines), parse_mode="HTML")
 
-# ===== QR GENERATOR (MUKAMMAL VA TEZKOR) =====
+# ===== QR GENERATOR (PARALLEL, TEZKOR) =====
+def _build_zip_sync(template_path, base, start_r, end_r, fill, back, size, px_off, py_off):
+    """Barcha QR larni parallel threadlarda yaratib ZIP qaytaradi."""
+    template_orig = Image.open(template_path).convert("RGBA")
+
+    def make_one(i):
+        code = base + str(i).zfill(2)
+        img  = template_orig.copy()
+        qr   = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10, border=1
+        )
+        qr.add_data(code)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color=fill, back_color=back).convert("RGBA")
+        qr_img = qr_img.resize((size, size), Image.LANCZOS)
+        img.paste(qr_img, (px_off, py_off), qr_img)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        return code, buf.getvalue()
+
+    results = list(_THREAD_POOL.map(make_one, range(start_r, end_r + 1)))
+
+    zip_buf = io.BytesIO()
+    # PNG allaqachon siqilgan — ZIP_STORED tezroq
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for code, data in results:
+            zf.writestr(f"{code}.png", data)
+    zip_buf.seek(0)
+    return zip_buf
+
+
 async def generate_qr(message, chat_id, uid, start_r: int, end_r: int):
     session = sessions.get(chat_id, {})
     count   = end_r - start_r + 1
 
-    # ---- Limit tekshirish (YANGI #2) ----
     ok_limit, limit_msg = check_limit(uid, count)
     if not ok_limit:
         await message.reply_text(limit_msg, parse_mode="HTML")
         return
 
     try:
-        # Shablonni bir marta yuklash — loop ichida emas!
-        template_orig = Image.open(session["template"]).convert("RGBA")
-        w, h = template_orig.size
-
+        template_path = session["template"]
+        template_orig = Image.open(template_path).convert("RGBA")
+        w, h    = template_orig.size
         block_w = int(w * 0.62)
         x1      = (w - block_w) // 2
         y1      = int(h * 0.44)
         size    = int(block_w * 0.85)
         px_off  = x1 + (block_w - size) // 2
         py_off  = y1 + (block_w - size) // 2
+        template_orig.close()
 
         _, fill, back = COLORS.get(session.get("color", "black"), ("", "black", "white"))
         fmt  = session.get("format", "zip")
         base = session.get("base", "")
 
-        # ---- QR rasmini tez yaratish (optimized) ----
-        def make_qr_img(code: str) -> Image.Image:
-            img = template_orig.copy()
-            qr  = qrcode.QRCode(
-                version=None,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,   # Yuqori sifat
-                border=1
-            )
-            qr.add_data(code)
-            qr.make(fit=True)
-            qr_img = qr.make_image(
-                fill_color=fill, back_color=back
-            ).convert("RGBA")
-            qr_img = qr_img.resize((size, size), Image.LANCZOS)
-            img.paste(qr_img, (px_off, py_off), qr_img)
-            return img
-
-        # ---- Formatga ko'ra yuborish ----
         if fmt == "zip":
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for i in range(start_r, end_r + 1):
-                    code = base + str(i).zfill(2)
-                    img  = make_qr_img(code)
-                    buf  = io.BytesIO()
-                    img.save(buf, "PNG", optimize=True)
-                    zf.writestr(f"{code}.png", buf.getvalue())
-            zip_buf.seek(0)
-            color_label = COLORS.get(session.get("color","black"), ("⚫ Qora",))[0]
+            # Parallel thread da yaratish — async loop bloklanmaydi
+            zip_buf = await asyncio.get_event_loop().run_in_executor(
+                _THREAD_POOL,
+                _build_zip_sync,
+                template_path, base, start_r, end_r,
+                fill, back, size, px_off, py_off
+            )
+            color_label = COLORS.get(session.get("color", "black"), ("⚫ Qora",))[0]
             await message.reply_document(
                 zip_buf,
                 filename=f"qr_{base}_{start_r:02d}-{end_r:02d}.zip",
@@ -440,14 +453,34 @@ async def generate_qr(message, chat_id, uid, start_r: int, end_r: int):
                 parse_mode="HTML"
             )
         else:
-            for i in range(start_r, end_r + 1):
+            # Alohida PNG — bittama-bitta yuborish
+            def make_single(i):
                 code = base + str(i).zfill(2)
-                img  = make_qr_img(code)
-                buf  = io.BytesIO()
-                img.save(buf, "PNG", optimize=True)
+                tmpl = Image.open(template_path).convert("RGBA")
+                block_w2 = int(tmpl.width * 0.62)
+                x1_  = (tmpl.width - block_w2) // 2
+                y1_  = int(tmpl.height * 0.44)
+                sz_  = int(block_w2 * 0.85)
+                px_  = x1_ + (block_w2 - sz_) // 2
+                py_  = y1_ + (block_w2 - sz_) // 2
+                qr = qrcode.QRCode(version=None,
+                    error_correction=qrcode.constants.ERROR_CORRECT_L,
+                    box_size=10, border=1)
+                qr.add_data(code)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color=fill, back_color=back).convert("RGBA")
+                qr_img = qr_img.resize((sz_, sz_), Image.LANCZOS)
+                tmpl.paste(qr_img, (px_, py_), qr_img)
+                buf = io.BytesIO()
+                tmpl.save(buf, "PNG", optimize=True)
                 buf.seek(0)
+                return code, buf
+
+            for i in range(start_r, end_r + 1):
+                code, buf = await asyncio.get_event_loop().run_in_executor(
+                    _THREAD_POOL, make_single, i)
                 await message.reply_document(buf, filename=f"{code}.png")
-                await asyncio.sleep(0.35)  # Telegram flood limit uchun
+                await asyncio.sleep(0.35)
             await message.reply_text(
                 f"✅ <b>{count}</b> ta PNG yuborildi!\n"
                 f"🔢 Kod: <code>{base}</code> [{start_r:02d}–{end_r:02d}]",
@@ -1169,8 +1202,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===== RUN =====
-PORT        = int(os.getenv("PORT", 8443))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Railway: https://yourapp.up.railway.app
+
 
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start",   cmd_start))
@@ -1184,8 +1216,6 @@ app.add_handler(CallbackQueryHandler(callback_router))
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-        )
-    else:
-        logger.info("Polling rejimida ishga tushdi ✅")
-        app.run_polling(drop_pending_updates=True)
-# test
+if __name__ == '__main__':
+    logger.info("Bot polling rejimida ishga tushdi ✅")
+    app.run_polling(drop_pending_updates=True)
